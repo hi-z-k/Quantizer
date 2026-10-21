@@ -43,8 +43,11 @@ class WikiText2Dataset(TextDataset):
     ) -> None:
         self.window = window
 
-        # Load and concatenate all text
-        dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+        # Load and concatenate all text (try canonical Salesforce/wikitext then fallback to wikitext)
+        try:
+            dataset = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split=split)
+        except Exception:
+            dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
         full_text = "\n\n".join(dataset["text"])
 
         # Tokenize

@@ -49,31 +49,40 @@ class PerplexityMetric(Metric):
         model.eval()
         device = next(model.parameters()).device
 
-        total_loss = 0.0
-        total_tokens = 0
+        batch_size = self.batch_size
+        while batch_size >= 1:
+            try:
+                total_loss = 0.0
+                total_tokens = 0
+                for start in range(0, len(dataset), batch_size):
+                    end = min(start + batch_size, len(dataset))
+                    batch = torch.stack([dataset[i] for i in range(start, end)]).to(device)
 
-        for start in range(0, len(dataset), self.batch_size):
-            end = min(start + self.batch_size, len(dataset))
-            batch = torch.stack([dataset[i] for i in range(start, end)]).to(device)
+                    # Forward pass
+                    outputs = model(batch)
+                    logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
 
-            # Forward pass
-            outputs = model(batch)
-            logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
+                    # Shift: predict token t+1 from position t
+                    shift_logits = logits[:, :-1, :].contiguous()
+                    shift_labels = batch[:, 1:].contiguous()
 
-            # Shift: predict token t+1 from position t
-            shift_logits = logits[:, :-1, :].contiguous()
-            shift_labels = batch[:, 1:].contiguous()
+                    # Cross-entropy in float32
+                    loss = F.cross_entropy(
+                        shift_logits.float().reshape(-1, shift_logits.size(-1)),
+                        shift_labels.reshape(-1),
+                        reduction="sum",
+                    )
 
-            # Cross-entropy in float32
-            loss = F.cross_entropy(
-                shift_logits.float().reshape(-1, shift_logits.size(-1)),
-                shift_labels.reshape(-1),
-                reduction="sum",
-            )
-
-            n_tokens = shift_labels.numel()
-            total_loss += loss.item()
-            total_tokens += n_tokens
+                    n_tokens = shift_labels.numel()
+                    total_loss += loss.item()
+                    total_tokens += n_tokens
+                break
+            except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+                if "out of memory" in str(e).lower() and batch_size > 1:
+                    torch.cuda.empty_cache()
+                    batch_size = max(1, batch_size // 2)
+                    continue
+                raise e
 
         if total_tokens == 0:
             return float("nan")
