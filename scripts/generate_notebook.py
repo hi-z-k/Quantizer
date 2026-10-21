@@ -736,13 +736,22 @@ if not hf_token and IS_KAGGLE:
 if not hf_token:
     print('HF_TOKEN not found in environment or Kaggle Secrets. Skipping Hugging Face upload.')
 else:
-    api = HfApi(token=hf_token)
-    repo_id = f'{HF_USER}/{HF_REPO}'
-    print(f'Creating repo {repo_id} on Hugging Face...')
-    api.create_repo(repo_id=repo_id, repo_type='model', exist_ok=True, private=False)
+    try:
+        api = HfApi(token=hf_token)
+        try:
+            user_info = api.whoami()
+            hf_username = user_info.get('name', HF_USER)
+            print(f'Authenticated with Hugging Face as user: {hf_username}')
+        except Exception as e:
+            print(f'whoami check failed ({e}), using configured HF_USER={HF_USER}')
+            hf_username = HF_USER
 
-    # Create Model Card README
-    model_card = f"""---
+        repo_id = f'{hf_username}/{HF_REPO}'
+        print(f'Creating repo {repo_id} on Hugging Face...')
+        api.create_repo(repo_id=repo_id, repo_type='model', exist_ok=True, private=False)
+
+        # Create Model Card README
+        model_card = f"""---
 license: apache-2.0
 base_model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
 tags:
@@ -766,21 +775,25 @@ from quantlab import load_native
 model, tokenizer = load_native("{repo_id}", subfolder="native")
 ```
 """
-    with open(OUTPUTS_DIR / 'MODEL_CARD.md', 'w') as f:
-        f.write(model_card)
+        with open(OUTPUTS_DIR / 'MODEL_CARD.md', 'w') as f:
+            f.write(model_card)
 
-    # Upload README
-    api.upload_file(path_or_fileobj=str(OUTPUTS_DIR / 'MODEL_CARD.md'), path_in_repo='README.md', repo_id=repo_id)
+        # Upload README
+        api.upload_file(path_or_fileobj=str(OUTPUTS_DIR / 'MODEL_CARD.md'), path_in_repo='README.md', repo_id=repo_id)
 
-    # Upload GGUFs
-    for gguf_file in (OUTPUTS_DIR / 'gguf').glob('*.gguf'):
-        print(f'Uploading {gguf_file.name}...')
-        api.upload_file(path_or_fileobj=str(gguf_file), path_in_repo=gguf_file.name, repo_id=repo_id)
+        # Upload GGUFs
+        for gguf_file in (OUTPUTS_DIR / 'gguf').glob('*.gguf'):
+            print(f'Uploading {gguf_file.name}...')
+            api.upload_file(path_or_fileobj=str(gguf_file), path_in_repo=gguf_file.name, repo_id=repo_id)
 
-    # Upload native folder
-    print('Uploading native safetensors folder...')
-    api.upload_folder(folder_path=str(OUTPUTS_DIR / 'native'), path_in_repo='native', repo_id=repo_id)
-    print(f'Successfully published to https://huggingface.co/{repo_id}!')'''
+        # Upload native folder
+        print('Uploading native safetensors folder...')
+        api.upload_folder(folder_path=str(OUTPUTS_DIR / 'native'), path_in_repo='native', repo_id=repo_id)
+        print(f'Successfully published to https://huggingface.co/{repo_id}!')
+    except Exception as e:
+        print(f'Hugging Face upload failed: {e}')
+        print('Check your HF_TOKEN permissions (requires Write role) and account username.')
+        print('All exported files remain saved and accessible in /kaggle/working/outputs/')'''
 
 cell_12_code = '''# ==============================================================================
 # FINAL CELL: List all generated artifacts in outputs with file sizes
