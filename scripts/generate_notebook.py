@@ -28,7 +28,7 @@ cell_1_code = '''# =============================================================
 # ==============================================================================
 GITHUB_USER = 'hi-z-k'
 REPO_NAME = 'Quantizer'
-HF_USER = 'hi-z-k'
+HF_USER = 'Hizkealhizk'
 HF_REPO = 'tinyllama-1.1b-chat-quantlab'
 SEED = 0
 EVAL_TOKENS = 100_000
