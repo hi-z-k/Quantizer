@@ -74,7 +74,10 @@ def load_native(
     _load_tensors(model, tensors, layer_info, device)
 
     # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    except Exception:
+        tokenizer = None
 
     model.eval()
     return model, tokenizer

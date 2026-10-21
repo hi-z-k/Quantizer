@@ -662,16 +662,18 @@ if winner_config is None:
 
 print(f'Exporting TinyLlama with winning config: {winner_config_name}...')
 model_tl = AutoModelForCausalLM.from_pretrained('TinyLlama/TinyLlama-1.1B-Chat-v1.0', torch_dtype=torch.float16)
+tok_tl = AutoTokenizer.from_pretrained('TinyLlama/TinyLlama-1.1B-Chat-v1.0')
+
 RTNQuantizer(winner_config, skip_names=('lm_head',)).quantize(model_tl)
 
 native_out_dir = OUTPUTS_DIR / 'native'
 exporter = NativeExporter()
-exporter.export(model_tl, winner_config, native_out_dir)
+exporter.export(model_tl, winner_config, native_out_dir, tokenizer=tok_tl)
 
 # Test reloading with load_native
 print('Verifying reloaded model forward pass...')
 reloaded_m, tok = load_native(str(native_out_dir), device='cpu')
-test_input = tok('Hello from quantlab mobile model!', return_tensors='pt')
+test_input = (tok or tok_tl)('Hello from quantlab mobile model!', return_tensors='pt')
 with torch.no_grad():
     test_out = reloaded_m(test_input['input_ids']).logits
 print(f'Reload verified! Logits shape: {test_out.shape}')

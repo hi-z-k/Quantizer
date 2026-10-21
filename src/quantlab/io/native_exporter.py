@@ -84,7 +84,22 @@ class NativeExporter(Exporter):
         with open(out_path / "quant_config.json", "w") as f:
             json.dump(quant_meta, f, indent=2)
 
-        # Copy tokenizer and config files
+        # Save HuggingFace model config if available
+        if hasattr(model, "config") and hasattr(model.config, "save_pretrained"):
+            try:
+                model.config.save_pretrained(out_path)
+            except Exception:
+                pass
+
+        # Save tokenizer if provided
+        tokenizer = kwargs.get("tokenizer")
+        if tokenizer is not None and hasattr(tokenizer, "save_pretrained"):
+            try:
+                tokenizer.save_pretrained(out_path)
+            except Exception:
+                pass
+
+        # Copy tokenizer and config files if source_dir is provided
         if source_dir is not None:
             self._copy_source_files(Path(source_dir), out_path)
 
