@@ -646,8 +646,9 @@ with open(OUTPUTS_DIR / 'decision.json', 'w') as f:
 print(f'Saved decision report to {OUTPUTS_DIR / "decision.json"}')'''
 
 cell_9_code = '''# ==============================================================================
-# NATIVE EXPORT: Quantize winner and export to safetensors + quant_config.json
+# NATIVE EXPORT: Quantize all 3 models with winner config & export to safetensors
 # ==============================================================================
+import shutil
 from quantlab import NativeExporter, load_native, RTNQuantizer, QuantConfig, Mode, Granularity
 
 winner_config_name = decision.get('winner')
@@ -660,26 +661,48 @@ if winner_config is None:
     winner_config = QuantConfig(bits=4, mode=Mode.SYMMETRIC, granularity=Granularity.GROUP, group_size=32)
     winner_config_name = winner_config.name
 
-print(f'Exporting TinyLlama with winning config: {winner_config_name}...')
-model_tl = AutoModelForCausalLM.from_pretrained('TinyLlama/TinyLlama-1.1B-Chat-v1.0', torch_dtype=torch.float16)
-tok_tl = AutoTokenizer.from_pretrained('TinyLlama/TinyLlama-1.1B-Chat-v1.0')
-
-RTNQuantizer(winner_config, skip_names=('lm_head',)).quantize(model_tl)
-
-native_out_dir = OUTPUTS_DIR / 'native'
 exporter = NativeExporter()
-exporter.export(model_tl, winner_config, native_out_dir, tokenizer=tok_tl)
+models_to_export = [
+    ('TinyLlama/TinyLlama-1.1B-Chat-v1.0', 'tinyllama-1.1b', 'TinyLlama 1.1B Chat'),
+    ('HuggingFaceTB/SmolLM2-135M-Instruct', 'smollm2-135m', 'SmolLM2 135M Instruct'),
+    ('HuggingFaceTB/SmolLM2-360M-Instruct', 'smollm2-360m', 'SmolLM2 360M Instruct'),
+]
 
-# Test reloading with load_native
-print('Verifying reloaded model forward pass...')
-reloaded_m, tok = load_native(str(native_out_dir), device='cpu')
-test_input = (tok or tok_tl)('Hello from quantlab mobile model!', return_tensors='pt')
-with torch.no_grad():
-    test_out = reloaded_m(test_input['input_ids']).logits
-print(f'Reload verified! Logits shape: {test_out.shape}')
+for model_id, folder_name, display_name in models_to_export:
+    target_dir = OUTPUTS_DIR / 'native' / folder_name
+    target_dir.mkdir(parents=True, exist_ok=True)
 
-del model_tl, reloaded_m
-gc.collect()'''
+    if (target_dir / 'model.safetensors').exists() and (target_dir / 'config.json').exists():
+        print(f'[{display_name}] Already exported in {target_dir.name}/, skipping.')
+        continue
+
+    # Move any legacy flat export into the subfolder
+    if folder_name == 'tinyllama-1.1b' and (OUTPUTS_DIR / 'native' / 'model.safetensors').exists():
+        print('Organizing flat TinyLlama export into subfolder...')
+        for f in (OUTPUTS_DIR / 'native').glob('*'):
+            if f.is_file():
+                shutil.move(str(f), str(target_dir / f.name))
+        print(f'[{display_name}] Successfully organized into {target_dir.name}/')
+        continue
+
+    print(f'Exporting {display_name} with {winner_config_name}...')
+    m = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16)
+    tok = AutoTokenizer.from_pretrained(model_id)
+
+    RTNQuantizer(winner_config, skip_names=('lm_head',)).quantize(m)
+    exporter.export(m, winner_config, target_dir, tokenizer=tok)
+
+    # Verify reload on CPU
+    reloaded_m, reloaded_tok = load_native(str(target_dir), device='cpu')
+    inp = (reloaded_tok or tok)('Hello from mobile model!', return_tensors='pt')
+    with torch.no_grad():
+        out_logits = reloaded_m(inp['input_ids']).logits
+    print(f'  {display_name} reload verified! Logits shape: {out_logits.shape}')
+
+    del m, reloaded_m
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()'''
 
 cell_10_code = '''# ==============================================================================
 # GGUF: Convert TinyLlama to F16 template and export Q8_0 & Q4_0 GGUF files
@@ -721,7 +744,7 @@ q4_mb = out_q4_path.stat().st_size / (1024 * 1024)
 print(f'  Q4_0 exported: {out_q4_path.name} ({q4_mb:.1f} MB)')'''
 
 cell_11_code = '''# ==============================================================================
-# HUGGING FACE UPLOAD: Upload GGUF and native safetensors with model card
+# HUGGING FACE UPLOAD: Upload all models (native + GGUF) with comprehensive README
 # ==============================================================================
 from huggingface_hub import HfApi
 
@@ -738,64 +761,61 @@ if not hf_token:
 else:
     try:
         api = HfApi(token=hf_token)
-        try:
-            user_info = api.whoami()
-            hf_username = user_info.get('name', HF_USER)
-            print(f'Authenticated with Hugging Face as user: {hf_username}')
-        except Exception as e:
-            print(f'whoami check failed ({e}), using configured HF_USER={HF_USER}')
-            hf_username = HF_USER
-
-        repo_id = f'{hf_username}/{HF_REPO}'
-        print(f'Creating repo {repo_id} on Hugging Face...')
+        repo_id = f'{HF_USER}/{HF_REPO}'
+        print(f'Connecting to repo https://huggingface.co/{repo_id}...')
         api.create_repo(repo_id=repo_id, repo_type='model', exist_ok=True, private=False)
 
         # Create Model Card README
         model_card = (
             "---\n"
             "license: apache-2.0\n"
-            "base_model: TinyLlama/TinyLlama-1.1B-Chat-v1.0\n"
             "tags:\n"
             "- quantization\n"
             "- quantlab\n"
             "- gguf\n"
+            "- pytorch\n"
             "---\n\n"
             f"# {HF_REPO}\n\n"
-            f"Quantized weights for TinyLlama-1.1B-Chat-v1.0 produced by the [quantlab](https://github.com/{GITHUB_USER}/{REPO_NAME}) post-training quantization library.\n\n"
-            "## Constraint & Decision\n"
-            "- Target device: Galaxy M15 (6 GB RAM)\n"
-            "- Size limit: <= 1200 MB and >= 60% reduction vs FP16\n"
-            f"- Selected config: `{winner_config_name}`\n\n"
-            "## How to load natively\n"
+            f"Post-training quantized language models produced by the [quantlab](https://github.com/{GITHUB_USER}/{REPO_NAME}) library.\n\n"
+            "## Quantization Details\n"
+            "- **Method:** Uniform Symmetric RTN (Round-to-Nearest)\n"
+            f"- **Configuration:** `{winner_config_name}` (4-bit weights, symmetric, group size 32)\n"
+            "- **Kept in FP16:** Embeddings and final output head (`lm_head`)\n\n"
+            "## Included Models\n"
+            "1. **TinyLlama-1.1B-Chat-v1.0** (Galaxy M15 Mobile Target: ~770 MB, +5.2% ΔPPL)\n"
+            "2. **SmolLM2-360M-Instruct** (~349 MB, +18.2% ΔPPL)\n"
+            "3. **SmolLM2-135M-Instruct** (~111 MB, +31.4% ΔPPL)\n\n"
+            "## How to Load Natively in Python\n"
             "```python\n"
-            "from quantlab import load_native\n"
-            f'model, tokenizer = load_native("{repo_id}", subfolder="native")\n'
-            "```\n"
+            "from quantlab import load_native\n\n"
+            "# 1. Load TinyLlama 1.1B (Winning mobile model)\n"
+            f'model_tl, tok_tl = load_native("{repo_id}", subfolder="native/tinyllama-1.1b")\n\n'
+            "# 2. Load SmolLM2 360M\n"
+            f'model_360m, tok_360m = load_native("{repo_id}", subfolder="native/smollm2-360m")\n\n'
+            "# 3. Load SmolLM2 135M\n"
+            f'model_135m, tok_135m = load_native("{repo_id}", subfolder="native/smollm2-135m")\n'
+            "```\n\n"
+            "## GGUF Formats (for llama.cpp / mobile runtimes)\n"
+            "- `tinyllama-1.1b-chat-q4_0.gguf` (4-bit group 32 layout)\n"
+            "- `tinyllama-1.1b-chat-q8_0.gguf` (8-bit group 32 layout)\n"
         )
         OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-        (OUTPUTS_DIR / 'MODEL_CARD.md').write_text(model_card, encoding='utf-8')
+        readme_file = OUTPUTS_DIR / 'README.md'
+        readme_file.write_text(model_card, encoding='utf-8')
 
-        # Upload README
-        print('Uploading README.md...')
-        api.upload_file(path_or_fileobj=str(OUTPUTS_DIR / 'MODEL_CARD.md'), path_in_repo='README.md', repo_id=repo_id)
+        print('--- Uploading all output data to Hugging Face ---')
+        total_mb = sum(f.stat().st_size for f in OUTPUTS_DIR.rglob('*') if f.is_file()) / (1024*1024)
+        print(f'Total data size: {total_mb:.1f} MB')
 
-        # Upload GGUFs
-        gguf_files = list((OUTPUTS_DIR / 'gguf').glob('*.gguf'))
-        print(f'Found {len(gguf_files)} GGUF file(s) to upload.')
-        for gguf_file in gguf_files:
-            print(f'Uploading {gguf_file.name} ({gguf_file.stat().st_size / (1024*1024):.1f} MB)...')
-            api.upload_file(path_or_fileobj=str(gguf_file), path_in_repo=gguf_file.name, repo_id=repo_id)
-
-        # Upload native folder
-        native_files = list((OUTPUTS_DIR / 'native').glob('*'))
-        print(f'Found {len(native_files)} native export file(s) to upload.')
-        if native_files:
-            print('Uploading native safetensors folder...')
-            api.upload_folder(folder_path=str(OUTPUTS_DIR / 'native'), path_in_repo='native', repo_id=repo_id)
-        print(f'Successfully published to https://huggingface.co/{repo_id}!')
+        api.upload_folder(
+            folder_path=str(OUTPUTS_DIR),
+            repo_id=repo_id,
+            repo_type='model',
+        )
+        print(f'Successfully published all outputs to https://huggingface.co/{repo_id}!')
     except Exception as e:
         print(f'Hugging Face upload failed: {e}')
-        print('Check your HF_TOKEN permissions (requires Write role) and account username.')
+        print('Check your HF_TOKEN permissions (requires Write role).')
         print('All exported files remain saved and accessible in /kaggle/working/outputs/')'''
 
 cell_12_code = '''# ==============================================================================
