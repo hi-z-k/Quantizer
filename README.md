@@ -121,24 +121,28 @@ quantlab/
 ├── src/
 │   └── quantlab/
 │       ├── __init__.py
-│       ├── interfaces.py
-│       ├── config.py
-│       ├── grouping.py
-│       ├── symmetric_params.py
-│       ├── asymmetric_params.py
-│       ├── bit_packer.py
-│       ├── linear_dequantizer.py
-│       ├── quantized_linear.py
-│       ├── rtn_quantizer.py
-│       ├── simulated_quantizer.py
-│       ├── snapshot.py
-│       ├── wikitext2_dataset.py
-│       ├── perplexity_metric.py
-│       ├── weight_error_metric.py
-│       ├── model_size_metric.py
-│       ├── native_exporter.py
-│       ├── native_loader.py
-│       └── gguf_exporter.py
+│       ├── interfaces.py             # Public abstract base classes
+│       ├── config.py                 # QuantConfig, Mode, Granularity
+│       ├── grouping.py               # Group, channel & tensor blocking
+│       ├── symmetric_params.py       # Symmetric scale computation (qmax, scale)
+│       ├── asymmetric_params.py      # Asymmetric scale & zero_point computation
+│       ├── bit_packer.py             # 2, 4, 8-bit sequential packing
+│       ├── linear_dequantizer.py     # Affine dequantization
+│       ├── quantized_linear.py       # Packed QuantizedLinear module
+│       ├── rtn_quantizer.py          # Post-training RTN quantizer
+│       ├── simulated_quantizer.py    # In-place simulate quantizer
+│       ├── snapshot.py               # Weight snapshot save & restore
+│       ├── io/                       # Model export & loading
+│       │   ├── __init__.py
+│       │   ├── native_exporter.py
+│       │   ├── native_loader.py
+│       │   └── gguf_exporter.py
+│       └── testing/                  # Evaluation datasets & metrics
+│           ├── __init__.py
+│           ├── wikitext2_dataset.py
+│           ├── perplexity_metric.py
+│           ├── weight_error_metric.py
+│           └── model_size_metric.py
 ├── examples/
 │   └── small_tensor_demo.py
 ├── phone/
