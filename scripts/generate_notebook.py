@@ -772,20 +772,26 @@ else:
             f'model, tokenizer = load_native("{repo_id}", subfolder="native")\n'
             "```\n"
         )
-        with open(OUTPUTS_DIR / 'MODEL_CARD.md', 'w') as f:
-            f.write(model_card)
+        OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+        (OUTPUTS_DIR / 'MODEL_CARD.md').write_text(model_card, encoding='utf-8')
 
         # Upload README
+        print('Uploading README.md...')
         api.upload_file(path_or_fileobj=str(OUTPUTS_DIR / 'MODEL_CARD.md'), path_in_repo='README.md', repo_id=repo_id)
 
         # Upload GGUFs
-        for gguf_file in (OUTPUTS_DIR / 'gguf').glob('*.gguf'):
-            print(f'Uploading {gguf_file.name}...')
+        gguf_files = list((OUTPUTS_DIR / 'gguf').glob('*.gguf'))
+        print(f'Found {len(gguf_files)} GGUF file(s) to upload.')
+        for gguf_file in gguf_files:
+            print(f'Uploading {gguf_file.name} ({gguf_file.stat().st_size / (1024*1024):.1f} MB)...')
             api.upload_file(path_or_fileobj=str(gguf_file), path_in_repo=gguf_file.name, repo_id=repo_id)
 
         # Upload native folder
-        print('Uploading native safetensors folder...')
-        api.upload_folder(folder_path=str(OUTPUTS_DIR / 'native'), path_in_repo='native', repo_id=repo_id)
+        native_files = list((OUTPUTS_DIR / 'native').glob('*'))
+        print(f'Found {len(native_files)} native export file(s) to upload.')
+        if native_files:
+            print('Uploading native safetensors folder...')
+            api.upload_folder(folder_path=str(OUTPUTS_DIR / 'native'), path_in_repo='native', repo_id=repo_id)
         print(f'Successfully published to https://huggingface.co/{repo_id}!')
     except Exception as e:
         print(f'Hugging Face upload failed: {e}')
