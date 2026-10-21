@@ -751,30 +751,27 @@ else:
         api.create_repo(repo_id=repo_id, repo_type='model', exist_ok=True, private=False)
 
         # Create Model Card README
-        model_card = f"""---
-license: apache-2.0
-base_model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
-tags:
-- quantization
-- quantlab
-- gguf
----
-
-# {HF_REPO}
-
-Quantized weights for TinyLlama-1.1B-Chat-v1.0 produced by the [quantlab](https://github.com/{GITHUB_USER}/{REPO_NAME}) post-training quantization library.
-
-## Constraint & Decision
-- Target device: Galaxy M15 (6 GB RAM)
-- Size limit: <= 1200 MB and >= 60% reduction vs FP16
-- Selected config: `{winner_config_name}`
-
-## How to load natively
-```python
-from quantlab import load_native
-model, tokenizer = load_native("{repo_id}", subfolder="native")
-```
-"""
+        model_card = (
+            "---\n"
+            "license: apache-2.0\n"
+            "base_model: TinyLlama/TinyLlama-1.1B-Chat-v1.0\n"
+            "tags:\n"
+            "- quantization\n"
+            "- quantlab\n"
+            "- gguf\n"
+            "---\n\n"
+            f"# {HF_REPO}\n\n"
+            f"Quantized weights for TinyLlama-1.1B-Chat-v1.0 produced by the [quantlab](https://github.com/{GITHUB_USER}/{REPO_NAME}) post-training quantization library.\n\n"
+            "## Constraint & Decision\n"
+            "- Target device: Galaxy M15 (6 GB RAM)\n"
+            "- Size limit: <= 1200 MB and >= 60% reduction vs FP16\n"
+            f"- Selected config: `{winner_config_name}`\n\n"
+            "## How to load natively\n"
+            "```python\n"
+            "from quantlab import load_native\n"
+            f'model, tokenizer = load_native("{repo_id}", subfolder="native")\n'
+            "```\n"
+        )
         with open(OUTPUTS_DIR / 'MODEL_CARD.md', 'w') as f:
             f.write(model_card)
 
