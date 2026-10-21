@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantlab"
+version = "0.1.0"
+description = "Post-training weight quantization for language models, written from scratch in raw PyTorch"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "transformers>=4.30",
+    "safetensors>=0.3",
+    "datasets>=2.14",
+    "huggingface_hub>=0.16",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+gguf = ["gguf>=0.6"]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
