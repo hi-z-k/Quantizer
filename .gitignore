@@ -38,8 +38,6 @@ outputs/
 .DS_Store
 Thumbs.db
 
-# Notebook checkpoints & files
+# Notebook checkpoints
 .ipynb_checkpoints/
-*.ipynb
-notebooks/
 quantlab-experiments/

@@ -69,6 +69,24 @@ class NativeExporter(Exporter):
                     if hasattr(module, "bias") and module.bias is not None:
                         tensors[f"{name}.bias"] = module.bias.data.to(torch.float16).contiguous()
 
+        # Safetensors does not allow multiple keys pointing to the same storage pointer
+        # (which occurs in architectures with tied word embeddings, e.g., embed_tokens & lm_head).
+        # We clone duplicate storage references so each tensor has independent storage.
+        seen_ptrs = set()
+        for k, v in list(tensors.items()):
+            storage_ptr = None
+            try:
+                storage_ptr = v.untyped_storage().data_ptr()
+            except Exception:
+                try:
+                    storage_ptr = v.storage().data_ptr()
+                except Exception:
+                    storage_ptr = v.data_ptr()
+            if storage_ptr in seen_ptrs:
+                tensors[k] = v.clone()
+            else:
+                seen_ptrs.add(storage_ptr)
+
         # Save tensors
         save_file(tensors, out_path / "model.safetensors")
 

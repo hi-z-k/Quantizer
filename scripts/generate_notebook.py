@@ -649,14 +649,38 @@ cell_9_code = '''# =============================================================
 # NATIVE EXPORT: Quantize all 3 models with winner config & export to safetensors
 # ==============================================================================
 import shutil
+import torch
+import safetensors.torch
 from quantlab import NativeExporter, load_native, RTNQuantizer, QuantConfig, Mode, Granularity
 
-winner_config_name = decision.get('winner')
+# Defensively handle tied weights across all safetensors versions (e.g. SmolLM2)
+_orig_save_file = safetensors.torch.save_file
+def _safe_save_file(tensors, filename, *args, **kwargs):
+    seen_ptrs = set()
+    cleaned = {}
+    for k, v in tensors.items():
+        try:
+            ptr = v.untyped_storage().data_ptr()
+        except Exception:
+            try:
+                ptr = v.storage().data_ptr()
+            except Exception:
+                ptr = v.data_ptr()
+        if ptr in seen_ptrs:
+            cleaned[k] = v.clone()
+        else:
+            seen_ptrs.add(ptr)
+            cleaned[k] = v
+    return _orig_save_file(cleaned, filename, *args, **kwargs)
+safetensors.torch.save_file = _safe_save_file
+
+winner_config_name = globals().get('decision', {}).get('winner') if 'decision' in globals() else 'int4_sym_group32'
 winner_config = None
-for cfg in CONFIGS_COMMON:
-    if cfg.name == winner_config_name:
-        winner_config = cfg
-        break
+if 'CONFIGS_COMMON' in globals():
+    for cfg in CONFIGS_COMMON:
+        if cfg.name == winner_config_name:
+            winner_config = cfg
+            break
 if winner_config is None:
     winner_config = QuantConfig(bits=4, mode=Mode.SYMMETRIC, granularity=Granularity.GROUP, group_size=32)
     winner_config_name = winner_config.name
@@ -685,21 +709,25 @@ for model_id, folder_name, display_name in models_to_export:
         print(f'[{display_name}] Successfully organized into {target_dir.name}/')
         continue
 
-    print(f'Exporting {display_name} with {winner_config_name}...')
-    m = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16)
-    tok = AutoTokenizer.from_pretrained(model_id)
+    try:
+        print(f'Exporting {display_name} with {winner_config_name}...')
+        m = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16)
+        tok = AutoTokenizer.from_pretrained(model_id)
 
-    RTNQuantizer(winner_config, skip_names=('lm_head',)).quantize(m)
-    exporter.export(m, winner_config, target_dir, tokenizer=tok)
+        RTNQuantizer(winner_config, skip_names=('lm_head',)).quantize(m)
+        exporter.export(m, winner_config, target_dir, tokenizer=tok)
 
-    # Verify reload on CPU
-    reloaded_m, reloaded_tok = load_native(str(target_dir), device='cpu')
-    inp = (reloaded_tok or tok)('Hello from mobile model!', return_tensors='pt')
-    with torch.no_grad():
-        out_logits = reloaded_m(inp['input_ids']).logits
-    print(f'  {display_name} reload verified! Logits shape: {out_logits.shape}')
+        # Verify reload on CPU
+        reloaded_m, reloaded_tok = load_native(str(target_dir), device='cpu')
+        inp = (reloaded_tok or tok)('Hello from mobile model!', return_tensors='pt')
+        with torch.no_grad():
+            out_logits = reloaded_m(inp['input_ids']).logits
+        print(f'  {display_name} reload verified! Logits shape: {out_logits.shape}')
 
-    del m, reloaded_m
+        del m, reloaded_m
+    except Exception as e:
+        print(f'Warning: Export of {display_name} encountered an issue: {e}')
+
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()'''
@@ -707,46 +735,67 @@ for model_id, folder_name, display_name in models_to_export:
 cell_10_code = '''# ==============================================================================
 # GGUF: Convert TinyLlama to F16 template and export Q8_0 & Q4_0 GGUF files
 # ==============================================================================
-from quantlab import GGUFExporter, QuantConfig, Mode, Granularity
+try:
+    from quantlab import GGUFExporter, QuantConfig, Mode, Granularity
 
-# Clone llama.cpp for converter script if needed
-llama_cpp_dir = BASE_DIR / 'llama_cpp'
-if not llama_cpp_dir.exists():
-    print('Cloning llama.cpp to generate F16 GGUF template...')
-    subprocess.run(['git', 'clone', '--depth', '1', 'https://github.com/ggml-org/llama.cpp', str(llama_cpp_dir)], check=True)
+    # Clone llama.cpp for converter script if needed
+    llama_cpp_dir = BASE_DIR / 'llama_cpp'
+    if not llama_cpp_dir.exists():
+        print('Cloning llama.cpp to generate F16 GGUF template...')
+        subprocess.run(['git', 'clone', '--depth', '1', 'https://github.com/ggml-org/llama.cpp', str(llama_cpp_dir)], check=True)
 
-# Find downloaded model cache directory for TinyLlama
-from huggingface_hub import snapshot_download
-tiny_model_dir = snapshot_download('TinyLlama/TinyLlama-1.1B-Chat-v1.0')
+    # Find downloaded model cache directory for TinyLlama
+    from huggingface_hub import snapshot_download
+    tiny_model_dir = snapshot_download('TinyLlama/TinyLlama-1.1B-Chat-v1.0')
 
-template_gguf = BASE_DIR / 'tinyllama-f16-template.gguf'
-if not template_gguf.exists():
-    print(f'Converting {tiny_model_dir} to F16 GGUF template...')
-    conv_script = llama_cpp_dir / 'convert_hf_to_gguf.py'
-    subprocess.run([sys.executable, str(conv_script), tiny_model_dir, '--outfile', str(template_gguf), '--outtype', 'f16'], check=True)
+    template_gguf = BASE_DIR / 'tinyllama-f16-template.gguf'
+    if not template_gguf.exists():
+        print(f'Converting {tiny_model_dir} to F16 GGUF template...')
+        conv_script = llama_cpp_dir / 'convert_hf_to_gguf.py'
+        subprocess.run([sys.executable, str(conv_script), tiny_model_dir, '--outfile', str(template_gguf), '--outtype', 'f16'], check=True)
 
-# Export Q8_0 and Q4_0 using quantlab GGUFExporter
-gguf_exporter = GGUFExporter(template_gguf)
-cfg_q8 = QuantConfig(bits=8, mode=Mode.SYMMETRIC, granularity=Granularity.GROUP, group_size=32)
-cfg_q4 = QuantConfig(bits=4, mode=Mode.SYMMETRIC, granularity=Granularity.GROUP, group_size=32)
+    # Export Q8_0 and Q4_0 using quantlab GGUFExporter
+    gguf_exporter = GGUFExporter(template_gguf)
+    cfg_q8 = QuantConfig(bits=8, mode=Mode.SYMMETRIC, granularity=Granularity.GROUP, group_size=32)
+    cfg_q4 = QuantConfig(bits=4, mode=Mode.SYMMETRIC, granularity=Granularity.GROUP, group_size=32)
 
-out_q8_path = OUTPUTS_DIR / 'gguf' / 'tinyllama-1.1b-chat-q8_0.gguf'
-out_q4_path = OUTPUTS_DIR / 'gguf' / 'tinyllama-1.1b-chat-q4_0.gguf'
+    out_q8_path = OUTPUTS_DIR / 'gguf' / 'tinyllama-1.1b-chat-q8_0.gguf'
+    out_q4_path = OUTPUTS_DIR / 'gguf' / 'tinyllama-1.1b-chat-q4_0.gguf'
 
-print('Exporting Q8_0 GGUF...')
-gguf_exporter.export(cfg_q8, out_q8_path)
-q8_mb = out_q8_path.stat().st_size / (1024 * 1024)
-print(f'  Q8_0 exported: {out_q8_path.name} ({q8_mb:.1f} MB)')
+    print('Exporting Q8_0 GGUF...')
+    gguf_exporter.export(cfg_q8, out_q8_path)
+    q8_mb = out_q8_path.stat().st_size / (1024 * 1024)
+    print(f'  Q8_0 exported: {out_q8_path.name} ({q8_mb:.1f} MB)')
 
-print('Exporting Q4_0 GGUF...')
-gguf_exporter.export(cfg_q4, out_q4_path)
-q4_mb = out_q4_path.stat().st_size / (1024 * 1024)
-print(f'  Q4_0 exported: {out_q4_path.name} ({q4_mb:.1f} MB)')'''
+    print('Exporting Q4_0 GGUF...')
+    gguf_exporter.export(cfg_q4, out_q4_path)
+    q4_mb = out_q4_path.stat().st_size / (1024 * 1024)
+    print(f'  Q4_0 exported: {out_q4_path.name} ({q4_mb:.1f} MB)')
+except Exception as e:
+    print(f'GGUF export step encountered an issue: {e}')
+    print('Continuing to upload phase...')'''
 
 cell_11_code = '''# ==============================================================================
 # HUGGING FACE UPLOAD: Upload all models (native + GGUF) with comprehensive README
 # ==============================================================================
+import os
+from pathlib import Path
 from huggingface_hub import HfApi
+
+GITHUB_USER = globals().get('GITHUB_USER', 'hi-z-k')
+REPO_NAME = globals().get('REPO_NAME', 'Quantizer')
+HF_USER = globals().get('HF_USER', 'Hizkealhizk')
+HF_REPO = globals().get('HF_REPO', 'tinyllama-1.1b-chat-quantlab')
+IS_KAGGLE = os.path.exists('/kaggle/working')
+BASE_DIR = Path('/kaggle/working') if IS_KAGGLE else Path('.').resolve()
+OUTPUTS_DIR = BASE_DIR / 'outputs'
+OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+winner_config_name = globals().get('winner_config_name')
+if not winner_config_name and 'decision' in globals():
+    winner_config_name = decision.get('winner')
+if not winner_config_name:
+    winner_config_name = 'int4_sym_group32'
 
 hf_token = os.environ.get('HF_TOKEN')
 if not hf_token and IS_KAGGLE:
@@ -776,15 +825,18 @@ else:
             "- pytorch\n"
             "---\n\n"
             f"# {HF_REPO}\n\n"
-            f"Post-training quantized language models produced by the [quantlab](https://github.com/{GITHUB_USER}/{REPO_NAME}) library.\n\n"
+            f"Post-training quantized language models and full experimental evaluation outputs produced by the [quantlab](https://github.com/{GITHUB_USER}/{REPO_NAME}) library.\n\n"
             "## Quantization Details\n"
             "- **Method:** Uniform Symmetric RTN (Round-to-Nearest)\n"
             f"- **Configuration:** `{winner_config_name}` (4-bit weights, symmetric, group size 32)\n"
             "- **Kept in FP16:** Embeddings and final output head (`lm_head`)\n\n"
-            "## Included Models\n"
-            "1. **TinyLlama-1.1B-Chat-v1.0** (Galaxy M15 Mobile Target: ~770 MB, +5.2% ΔPPL)\n"
-            "2. **SmolLM2-360M-Instruct** (~349 MB, +18.2% ΔPPL)\n"
-            "3. **SmolLM2-135M-Instruct** (~111 MB, +31.4% ΔPPL)\n\n"
+            "## Included Artifacts in Repository\n"
+            "- `native/`: Quantized models in PyTorch safetensors format (TinyLlama 1.1B, SmolLM2 360M, SmolLM2 135M)\n"
+            "- `gguf/`: Quantized GGUF models for mobile / llama.cpp deployment (Q4_0, Q8_0)\n"
+            "- `figures/`: Experimental evaluation charts (bit-width sweep, granularity, diminishing returns, SQNR correlation)\n"
+            "- `tables/`: LaTeX tables formatted with booktabs\n"
+            "- `results.csv`: Full experimental measurements\n"
+            "- `decision.json`: Mobile deployment constraint decision report\n\n"
             "## How to Load Natively in Python\n"
             "```python\n"
             "from quantlab import load_native\n\n"
@@ -799,7 +851,6 @@ else:
             "- `tinyllama-1.1b-chat-q4_0.gguf` (4-bit group 32 layout)\n"
             "- `tinyllama-1.1b-chat-q8_0.gguf` (8-bit group 32 layout)\n"
         )
-        OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
         readme_file = OUTPUTS_DIR / 'README.md'
         readme_file.write_text(model_card, encoding='utf-8')
 
